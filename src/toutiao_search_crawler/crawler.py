@@ -109,14 +109,14 @@ class ToutiaoCrawler:
             urls: list[str] = []
             seen: set[str] = set()
             for _ in range(6):
-                for _ in range(4):
+                for _ in range(10):
                     for url in await self._extract_search_links(page):
                         if url not in seen:
                             seen.add(url)
                             urls.append(url)
                             if len(urls) >= limit:
                                 return urls
-                    await page.mouse.wheel(0, 1200)
+                    await page.mouse.wheel(0, 1500)
                     await page.wait_for_timeout(800)
 
                 next_page_url = await self._get_next_page_url(page)
