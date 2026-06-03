@@ -6,7 +6,7 @@ import logging
 import re
 from dataclasses import asdict, dataclass
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from playwright.async_api import Browser, BrowserContext, Error, Page, async_playwright
 
@@ -20,7 +20,7 @@ DEFAULT_SEARCH_URL = (
     "action_type=search_subtab_switch&search_id="
 )
 
-ARTICLE_URL_RE = re.compile(r"https?://(?:www\.)?toutiao\.com/article/\d+")
+ARTICLE_URL_RE = re.compile(r"https?://(?:www\.)?toutiao\.com/(?:article/|a)(\d+)")
 
 
 @dataclass(slots=True)
@@ -94,15 +94,22 @@ class ToutiaoCrawler:
 
             urls: list[str] = []
             seen: set[str] = set()
-            for _ in range(8):
-                for url in await self._extract_search_links(page):
-                    if url not in seen:
-                        seen.add(url)
-                        urls.append(url)
-                        if len(urls) >= limit:
-                            return urls
-                await page.mouse.wheel(0, 1200)
-                await page.wait_for_timeout(1_000)
+            for _ in range(6):
+                for _ in range(4):
+                    for url in await self._extract_search_links(page):
+                        if url not in seen:
+                            seen.add(url)
+                            urls.append(url)
+                            if len(urls) >= limit:
+                                return urls
+                    await page.mouse.wheel(0, 1200)
+                    await page.wait_for_timeout(800)
+
+                next_page_url = await self._get_next_page_url(page)
+                if not next_page_url:
+                    break
+                await page.goto(next_page_url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+                await self._settle(page)
             return urls
         finally:
             await page.close()
@@ -114,14 +121,29 @@ class ToutiaoCrawler:
         )
         html = await page.content()
         urls: list[str] = []
-        for raw_link in [*raw_links, *ARTICLE_URL_RE.findall(html)]:
+        for raw_link in [*raw_links, html]:
             if not isinstance(raw_link, str):
                 continue
-            absolute = urljoin(page.url, raw_link)
-            match = ARTICLE_URL_RE.search(absolute)
-            if match:
-                urls.append(match.group(0) + "/?channel=&source=news")
+            for candidate in _article_urls_from_text(urljoin(page.url, raw_link)):
+                urls.append(candidate)
         return urls
+
+    async def _get_next_page_url(self, page: Page) -> str | None:
+        links = await page.eval_on_selector_all(
+            "a[href]",
+            """anchors => anchors.map(anchor => ({
+                text: anchor.innerText || anchor.textContent || "",
+                href: anchor.href || anchor.getAttribute("href") || ""
+            }))""",
+        )
+        for link in links:
+            if not isinstance(link, dict):
+                continue
+            text = str(link.get("text", "")).strip()
+            href = str(link.get("href", "")).strip()
+            if text == "下一页" and href:
+                return urljoin(page.url, href)
+        return None
 
     async def fetch_article(self, context: BrowserContext, article_url: str) -> ArticleData:
         page = await context.new_page()
@@ -137,7 +159,7 @@ class ToutiaoCrawler:
                 title=_clean(extracted.get("title")),
                 publish_time=_clean(extracted.get("publishTime")),
                 author=_clean(extracted.get("author")),
-                like_count=_clean(extracted.get("likeCount")),
+                like_count=_clean_like_count(extracted.get("likeCount")),
                 content=_clean(extracted.get("content")),
             )
         except Error as exc:
@@ -166,6 +188,55 @@ def _clean(value: Any) -> str | None:
         return None
     text = re.sub(r"\s+", " ", str(value)).strip()
     return text or None
+
+
+def _clean_like_count(value: Any) -> str | None:
+    text = _clean(value)
+    if not text or text in {"赞", "点赞"}:
+        return None
+    match = re.search(r"([0-9,.万wW]+)", text)
+    return match.group(1) if match else text
+
+
+def _article_urls_from_text(text: str) -> list[str]:
+    decoded_texts = [text]
+    for _ in range(3):
+        decoded = unquote(decoded_texts[-1])
+        if decoded == decoded_texts[-1]:
+            break
+        decoded_texts.append(decoded)
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for decoded_text in decoded_texts:
+        candidates = [decoded_text, *_nested_url_params(decoded_text)]
+        for candidate in candidates:
+            for match in ARTICLE_URL_RE.finditer(candidate):
+                article_id = match.group(1)
+                url = f"https://www.toutiao.com/article/{article_id}/?channel=&source=news"
+                if url not in seen:
+                    seen.add(url)
+                    urls.append(url)
+    return urls
+
+
+def _nested_url_params(text: str) -> list[str]:
+    urls: list[str] = []
+    pending = [text]
+    seen: set[str] = set()
+    for _ in range(4):
+        if not pending:
+            break
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        parsed = urlparse(current)
+        for value in parse_qs(parsed.query).get("url", []):
+            decoded = unquote(value)
+            urls.append(decoded)
+            pending.append(decoded)
+    return urls
 
 
 EXTRACT_ARTICLE_SCRIPT = r"""
