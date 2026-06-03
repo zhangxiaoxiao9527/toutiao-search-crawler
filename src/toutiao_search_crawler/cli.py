@@ -5,17 +5,23 @@ import asyncio
 import logging
 import os
 
-from .crawler import DEFAULT_SEARCH_URL, ToutiaoCrawler
+from .crawler import DEFAULT_KEYWORD, ToutiaoCrawler
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Crawl Toutiao search result article details.")
     parser.add_argument(
-        "--url",
-        default=os.getenv("TOUTIAO_SEARCH_URL", DEFAULT_SEARCH_URL),
-        help="Toutiao search URL. Defaults to the example URL or TOUTIAO_SEARCH_URL.",
+        "--keyword",
+        default=os.getenv("TOUTIAO_SEARCH_KEYWORD", DEFAULT_KEYWORD),
+        help="Search keyword. Defaults to the example keyword or TOUTIAO_SEARCH_KEYWORD.",
     )
     parser.add_argument("--limit", type=int, default=20, help="Maximum article count to crawl.")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        help="Maximum concurrent article detail pages.",
+    )
     parser.add_argument("--headed", action="store_true", help="Show the browser window.")
     parser.add_argument(
         "--delay",
@@ -33,8 +39,12 @@ async def async_main() -> None:
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
-    crawler = ToutiaoCrawler(headless=not args.headed, delay_seconds=args.delay)
-    await crawler.crawl(search_url=args.url, limit=args.limit)
+    crawler = ToutiaoCrawler(
+        headless=not args.headed,
+        delay_seconds=args.delay,
+        concurrency=args.concurrency,
+    )
+    await crawler.crawl(keyword=args.keyword, limit=args.limit)
 
 
 def main() -> None:

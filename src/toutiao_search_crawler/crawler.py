@@ -6,19 +6,15 @@ import logging
 import re
 from dataclasses import asdict, dataclass
 from typing import Any
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, unquote, urljoin, urlparse
 
 from playwright.async_api import Browser, BrowserContext, Error, Page, async_playwright
 
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_SEARCH_URL = (
-    "https://so.toutiao.com/search?"
-    "cur_tab_title=news&enable_druid_v2=1&pd=information&"
-    "keyword=%E7%BE%8E%E4%BC%8A%E5%86%B2%E7%AA%81%E6%9C%80%E6%96%B0%E8%BF%9B%E5%B1%95&"
-    "page_num=0&dvpf=pc&from=news&source=search_subtab_switch&"
-    "action_type=search_subtab_switch&search_id="
-)
+SEARCH_ENDPOINT = "https://so.toutiao.com/search"
+DEFAULT_KEYWORD = "美伊冲突最新进展"
+DEFAULT_SEARCH_URL = ""
 
 ARTICLE_URL_RE = re.compile(r"https?://(?:www\.)?toutiao\.com/(?:article/|a)(\d+)")
 
@@ -40,12 +36,14 @@ class ToutiaoCrawler:
         headless: bool = True,
         timeout_ms: int = 30_000,
         delay_seconds: float = 0.8,
+        concurrency: int = 4,
     ) -> None:
         self.headless = headless
         self.timeout_ms = timeout_ms
         self.delay_seconds = delay_seconds
+        self.concurrency = max(1, concurrency)
 
-    async def crawl(self, search_url: str = DEFAULT_SEARCH_URL, limit: int = 20) -> list[ArticleData]:
+    async def crawl(self, keyword: str = DEFAULT_KEYWORD, limit: int = 20) -> list[ArticleData]:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(
                 headless=self.headless,
@@ -53,20 +51,36 @@ class ToutiaoCrawler:
             )
             context = await self._new_context(browser)
             try:
+                search_url = build_search_url(keyword)
                 article_urls = await self.collect_article_urls(context, search_url, limit)
                 LOGGER.info("Collected %s article urls from search page", len(article_urls))
-
-                articles: list[ArticleData] = []
-                for index, url in enumerate(article_urls, start=1):
-                    LOGGER.info("Crawling article %s/%s: %s", index, len(article_urls), url)
-                    article = await self.fetch_article(context, url)
-                    articles.append(article)
-                    LOGGER.info("ARTICLE %s", json.dumps(asdict(article), ensure_ascii=False))
-                    await asyncio.sleep(self.delay_seconds)
-                return articles
+                return await self.fetch_articles(context, article_urls)
             finally:
                 await context.close()
                 await browser.close()
+
+    async def fetch_articles(
+        self,
+        context: BrowserContext,
+        article_urls: list[str],
+    ) -> list[ArticleData]:
+        semaphore = asyncio.Semaphore(self.concurrency)
+        total = len(article_urls)
+
+        async def fetch_one(index: int, url: str) -> ArticleData:
+            async with semaphore:
+                LOGGER.info("Crawling article %s/%s: %s", index, total, url)
+                article = await self.fetch_article(context, url)
+                LOGGER.info("ARTICLE %s", json.dumps(asdict(article), ensure_ascii=False))
+                if self.delay_seconds > 0:
+                    await asyncio.sleep(self.delay_seconds)
+                return article
+
+        tasks = [
+            asyncio.create_task(fetch_one(index, url))
+            for index, url in enumerate(article_urls, start=1)
+        ]
+        return list(await asyncio.gather(*tasks))
 
     async def _new_context(self, browser: Browser) -> BrowserContext:
         context = await browser.new_context(
@@ -188,6 +202,22 @@ def _clean(value: Any) -> str | None:
         return None
     text = re.sub(r"\s+", " ", str(value)).strip()
     return text or None
+
+
+def build_search_url(keyword: str | None = None) -> str:
+    params = {
+        "keyword": keyword or DEFAULT_KEYWORD,
+        "source": "search_subtab_switch",
+        "enable_druid_v2": "1",
+        "dvpf": "pc",
+        "pd": "information",
+        "action_type": "search_subtab_switch",
+        "page_num": "0",
+        "search_id": "",
+        "from": "news",
+        "cur_tab_title": "news",
+    }
+    return f"{SEARCH_ENDPOINT}?{urlencode(params)}"
 
 
 def _clean_like_count(value: Any) -> str | None:

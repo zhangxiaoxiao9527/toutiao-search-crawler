@@ -31,10 +31,16 @@ python -m venv .venv
 .\.venv\Scripts\toutiao-search-crawler --limit 20
 ```
 
-Or run with a custom search URL:
+Or run with a custom search keyword:
 
 ```powershell
-.\.venv\Scripts\toutiao-search-crawler --url "https://so.toutiao.com/search?..." --limit 20
+.\.venv\Scripts\toutiao-search-crawler --keyword "美伊冲突最新进展" --limit 20
+```
+
+Tune article detail concurrency:
+
+```powershell
+.\.venv\Scripts\toutiao-search-crawler --keyword "美伊冲突最新进展" --limit 20 --concurrency 4
 ```
 
 For debugging selectors, show the browser window:
