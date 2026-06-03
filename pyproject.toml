@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "toutiao-search-crawler"
+version = "0.1.0"
+description = "A Playwright-based crawler for Toutiao search result article pages."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "zhangxiaoxiao9527" }
+]
+dependencies = [
+    "playwright>=1.44,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4,<1.0",
+]
+
+[project.scripts]
+toutiao-search-crawler = "toutiao_search_crawler.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
